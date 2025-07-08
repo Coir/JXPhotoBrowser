@@ -234,26 +234,49 @@ open class JXPhotoBrowserImageCell: UIView, UIScrollViewDelegate, UIGestureRecog
     
     /// 响应拖动
     @objc open func onPan(_ pan: UIPanGestureRecognizer) {
-        guard imageView.image != nil else {
-            return
-        }
+        guard imageView.image != nil, let browser = photoBrowser else { return }
+        let total = browser.numberOfItems()
+        let isSingle = total <= 1
+        let velocity = pan.velocity(in: self)
+        let translation = pan.translation(in: self)
+        let absX = abs(velocity.x), absY = abs(velocity.y)
+        let isHorizontal = absX > absY
+        let isVertical = absY > absX
+        let offsetX = scrollView.contentOffset.x
+        let pageIndex = browser.pageIndex
+        let itemCount = browser.numberOfItems()
+        let atLeft = pageIndex == 0
+        let atRight = pageIndex == itemCount - 1
+        let offsetY = scrollView.contentOffset.y
+        let maxOffsetY = max(0, scrollView.contentSize.height - scrollView.bounds.height)
+        let atTop = offsetY <= 0
+        let atBottom = abs(offsetY - maxOffsetY) < 1e-2
+        // 只允许主方向的边界滑动
+        let allowDown = (isSingle || (isVertical && atTop && velocity.y > 0))
+        let allowUp = (isSingle || (isVertical && atBottom && velocity.y < 0))
+        let allowRight = (isSingle || (isHorizontal && atLeft && velocity.x > 0))
+        let allowLeft = (isSingle || (isHorizontal && atRight && velocity.x < 0))
+        guard allowDown || allowUp || allowRight || allowLeft else { return }
         switch pan.state {
         case .began:
             beganFrame = imageView.frame
             beganTouch = pan.location(in: scrollView)
         case .changed:
-            let result = panResult(pan)
+            let result = panResult(pan, isHorizontal: isHorizontal)
             imageView.frame = result.frame
-            photoBrowser?.maskView.alpha = result.scale * result.scale
-            photoBrowser?.pageIndicator?.isHidden = result.scale < 0.99
+            browser.maskView.alpha = result.scale * result.scale
+            browser.pageIndicator?.isHidden = result.scale < 0.99
         case .ended, .cancelled:
-            imageView.frame = panResult(pan).frame
-            let isDown = pan.velocity(in: self).y > 0
-            if isDown {
-                photoBrowser?.dismiss()
+            imageView.frame = panResult(pan, isHorizontal: isHorizontal).frame
+            let isDown = isVertical && atTop && velocity.y > 0
+            let isUp = isVertical && atBottom && velocity.y < 0
+            let isRight = isHorizontal && atLeft && velocity.x > 0
+            let isLeft = isHorizontal && atRight && velocity.x < 0
+            if isDown || isUp || isRight || isLeft {
+                browser.dismiss()
             } else {
-                photoBrowser?.maskView.alpha = 1.0
-                photoBrowser?.pageIndicator?.isHidden = false
+                browser.maskView.alpha = 1.0
+                browser.pageIndicator?.isHidden = false
                 resetImageViewPosition()
             }
         default:
@@ -261,28 +284,20 @@ open class JXPhotoBrowserImageCell: UIView, UIScrollViewDelegate, UIGestureRecog
         }
     }
     
-    /// 计算拖动时图片应调整的frame和scale值
-    private func panResult(_ pan: UIPanGestureRecognizer) -> (frame: CGRect, scale: CGFloat) {
-        // 拖动偏移量
-        let translation = pan.translation(in: scrollView)
-        let currentTouch = pan.location(in: scrollView)
-        
-        // 由下拉的偏移值决定缩放比例，越往下偏移，缩得越小。scale值区间[0.3, 1.0]
-        let scale = min(1.0, max(0.3, 1 - translation.y / bounds.height))
-        
+    /// 计算拖动时图片应调整的frame和scale值，横向/纵向缩放一致
+    private func panResult(_ pan: UIPanGestureRecognizer, isHorizontal: Bool) -> (frame: CGRect, scale: CGFloat) {
+        let translation = pan.translation(in: self)
+        let mainDelta = isHorizontal ? translation.x : translation.y
+        let scale = min(1.0, max(0.3, 1 - abs(mainDelta) / bounds.width))
         let width = beganFrame.size.width * scale
         let height = beganFrame.size.height * scale
-        
-        // 计算x和y。保持手指在图片上的相对位置不变。
-        // 即如果手势开始时，手指在图片X轴三分之一处，那么在移动图片时，保持手指始终位于图片X轴的三分之一处
         let xRate = (beganTouch.x - beganFrame.origin.x) / beganFrame.size.width
+        let currentTouch = pan.location(in: scrollView)
         let currentTouchDeltaX = xRate * width
         let x = currentTouch.x - currentTouchDeltaX
-        
         let yRate = (beganTouch.y - beganFrame.origin.y) / beganFrame.size.height
         let currentTouchDeltaY = yRate * height
         let y = currentTouch.y - currentTouchDeltaY
-        
         return (CGRect(x: x.isNaN ? 0 : x, y: y.isNaN ? 0 : y, width: width, height: height), scale)
     }
     
@@ -299,26 +314,28 @@ open class JXPhotoBrowserImageCell: UIView, UIScrollViewDelegate, UIGestureRecog
         }
     }
     
+    /// 手势识别是否允许开始
     open override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        // 只处理pan手势
-        guard let pan = gestureRecognizer as? UIPanGestureRecognizer else {
+        guard let pan = gestureRecognizer as? UIPanGestureRecognizer, let browser = photoBrowser else { return true }
+        let total = browser.numberOfItems()
+        let isSingle = total <= 1
+        if isSingle { return true }
+        let velocity = pan.velocity(in: self)
+        let absX = abs(velocity.x), absY = abs(velocity.y)
+        let isHorizontal = absX > absY
+        let isVertical = absY > absX
+        let pageIndex = browser.pageIndex
+        let itemCount = browser.numberOfItems()
+        let atLeft = pageIndex == 0
+        let atRight = pageIndex == itemCount - 1
+        let offsetY = scrollView.contentOffset.y
+        let maxOffsetY = max(0, scrollView.contentSize.height - scrollView.bounds.height)
+        let atTop = offsetY <= 0
+        let atBottom = abs(offsetY - maxOffsetY) < 1e-2
+        if (isVertical && atTop && velocity.y > 0) || (isVertical && atBottom && velocity.y < 0) || (isHorizontal && atLeft && velocity.x > 0) || (isHorizontal && atRight && velocity.x < 0) {
             return true
         }
-        let velocity = pan.velocity(in: self)
-        // 向上滑动时，不响应手势
-        if velocity.y < 0 {
-            return false
-        }
-        // 横向滑动时，不响应pan手势
-        if abs(Int(velocity.x)) > Int(velocity.y) {
-            return false
-        }
-        // 向下滑动，如果图片顶部超出可视区域，不响应手势
-        if scrollView.contentOffset.y > 0 {
-            return false
-        }
-        // 响应允许范围内的下滑手势
-        return true
+        return false
     }
     
     open var showContentView: UIView {
