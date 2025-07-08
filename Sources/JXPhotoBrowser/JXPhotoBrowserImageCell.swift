@@ -99,9 +99,9 @@ open class JXPhotoBrowserImageCell: UIView, UIScrollViewDelegate, UIGestureRecog
     open var longPressedAction: LongPressAction? {
         didSet {
             if oldValue != nil && longPressedAction == nil {
-                removeGestureRecognizer(longPress)
+                safelyRemoveGesture(longPress)
             } else if oldValue == nil && longPressedAction != nil {
-                addGestureRecognizer(longPress)
+                safelyAddGesture(longPress)
             }
         }
     }
@@ -239,39 +239,34 @@ open class JXPhotoBrowserImageCell: UIView, UIScrollViewDelegate, UIGestureRecog
         let isSingle = total <= 1
         let velocity = pan.velocity(in: self)
         let translation = pan.translation(in: self)
-        let absX = abs(velocity.x), absY = abs(velocity.y)
-        let isHorizontal = absX > absY
-        let isVertical = absY > absX
-        let offsetX = scrollView.contentOffset.x
-        let pageIndex = browser.pageIndex
-        let itemCount = browser.numberOfItems()
-        let atLeft = pageIndex == 0
-        let atRight = pageIndex == itemCount - 1
         let offsetY = scrollView.contentOffset.y
         let maxOffsetY = max(0, scrollView.contentSize.height - scrollView.bounds.height)
-        let atTop = offsetY <= 0
-        let atBottom = abs(offsetY - maxOffsetY) < 1e-2
-        // 只允许主方向的边界滑动
-        let allowDown = (isSingle || (isVertical && atTop && velocity.y > 0))
-        let allowUp = (isSingle || (isVertical && atBottom && velocity.y < 0))
-        let allowRight = (isSingle || (isHorizontal && atLeft && velocity.x > 0))
-        let allowLeft = (isSingle || (isHorizontal && atRight && velocity.x < 0))
-        guard allowDown || allowUp || allowRight || allowLeft else { return }
+        let pageIndex = browser.pageIndex
+        let itemCount = browser.numberOfItems()
+        let ctx = panContext(velocity: velocity, pageIndex: pageIndex, itemCount: itemCount, offsetY: offsetY, maxOffsetY: maxOffsetY, isSingle: isSingle)
+        guard ctx.allowDown || ctx.allowUp || ctx.allowRight || ctx.allowLeft else {
+            if pan.state == .ended || pan.state == .cancelled {
+                browser.maskView.alpha = 1.0
+                browser.pageIndicator?.isHidden = false
+                resetImageViewPosition()
+            }
+            return
+        }
         switch pan.state {
         case .began:
             beganFrame = imageView.frame
             beganTouch = pan.location(in: scrollView)
         case .changed:
-            let result = panResult(pan, isHorizontal: isHorizontal)
+            let result = panResult(pan, isHorizontal: ctx.isHorizontal)
             imageView.frame = result.frame
             browser.maskView.alpha = result.scale * result.scale
             browser.pageIndicator?.isHidden = result.scale < 0.99
         case .ended, .cancelled:
-            imageView.frame = panResult(pan, isHorizontal: isHorizontal).frame
-            let isDown = isVertical && atTop && velocity.y > 0
-            let isUp = isVertical && atBottom && velocity.y < 0
-            let isRight = isHorizontal && atLeft && velocity.x > 0
-            let isLeft = isHorizontal && atRight && velocity.x < 0
+            imageView.frame = panResult(pan, isHorizontal: ctx.isHorizontal).frame
+            let isDown = ctx.isVertical && ctx.atTop && velocity.y > 0
+            let isUp = ctx.isVertical && ctx.atBottom && velocity.y < 0
+            let isRight = ctx.isHorizontal && ctx.atLeft && velocity.x > 0
+            let isLeft = ctx.isHorizontal && ctx.atRight && velocity.x < 0
             if isDown || isUp || isRight || isLeft {
                 browser.dismiss()
             } else {
@@ -321,18 +316,12 @@ open class JXPhotoBrowserImageCell: UIView, UIScrollViewDelegate, UIGestureRecog
         let isSingle = total <= 1
         if isSingle { return true }
         let velocity = pan.velocity(in: self)
-        let absX = abs(velocity.x), absY = abs(velocity.y)
-        let isHorizontal = absX > absY
-        let isVertical = absY > absX
-        let pageIndex = browser.pageIndex
-        let itemCount = browser.numberOfItems()
-        let atLeft = pageIndex == 0
-        let atRight = pageIndex == itemCount - 1
         let offsetY = scrollView.contentOffset.y
         let maxOffsetY = max(0, scrollView.contentSize.height - scrollView.bounds.height)
-        let atTop = offsetY <= 0
-        let atBottom = abs(offsetY - maxOffsetY) < 1e-2
-        if (isVertical && atTop && velocity.y > 0) || (isVertical && atBottom && velocity.y < 0) || (isHorizontal && atLeft && velocity.x > 0) || (isHorizontal && atRight && velocity.x < 0) {
+        let pageIndex = browser.pageIndex
+        let itemCount = browser.numberOfItems()
+        let ctx = panContext(velocity: velocity, pageIndex: pageIndex, itemCount: itemCount, offsetY: offsetY, maxOffsetY: maxOffsetY, isSingle: isSingle)
+        if (ctx.isVertical && ctx.atTop && velocity.y > 0) || (ctx.isVertical && ctx.atBottom && velocity.y < 0) || (ctx.isHorizontal && ctx.atLeft && velocity.x > 0) || (ctx.isHorizontal && ctx.atRight && velocity.x < 0) {
             return true
         }
         return false
@@ -340,5 +329,52 @@ open class JXPhotoBrowserImageCell: UIView, UIScrollViewDelegate, UIGestureRecog
     
     open var showContentView: UIView {
         return imageView
+    }
+}
+
+// MARK: - 辅助方向与边界判断
+fileprivate extension JXPhotoBrowserImageCell {
+    /// 计算滑动方向和边界信息
+    struct PanContext {
+        let isHorizontal: Bool
+        let isVertical: Bool
+        let atTop: Bool
+        let atBottom: Bool
+        let atLeft: Bool
+        let atRight: Bool
+        let allowDown: Bool
+        let allowUp: Bool
+        let allowRight: Bool
+        let allowLeft: Bool
+    }
+    /// 获取滑动方向和边界信息
+    func panContext(velocity: CGPoint, pageIndex: Int, itemCount: Int, offsetY: CGFloat, maxOffsetY: CGFloat, isSingle: Bool) -> PanContext {
+        let absX = abs(velocity.x), absY = abs(velocity.y)
+        let isHorizontal = absX > absY
+        let isVertical = absY > absX
+        let atLeft = pageIndex == 0
+        let atRight = pageIndex == itemCount - 1
+        let atTop = offsetY <= 0
+        let atBottom = abs(offsetY - maxOffsetY) < 1e-2
+        let allowDown = (isSingle || (isVertical && atTop && velocity.y > 0))
+        let allowUp = (isSingle || (isVertical && atBottom && velocity.y < 0))
+        let allowRight = (isSingle || (isHorizontal && atLeft && velocity.x > 0))
+        let allowLeft = (isSingle || (isHorizontal && atRight && velocity.x < 0))
+        return PanContext(isHorizontal: isHorizontal, isVertical: isVertical, atTop: atTop, atBottom: atBottom, atLeft: atLeft, atRight: atRight, allowDown: allowDown, allowUp: allowUp, allowRight: allowRight, allowLeft: allowLeft)
+    }
+}
+
+fileprivate extension JXPhotoBrowserImageCell {
+    /// 安全添加手势
+    func safelyAddGesture(_ gesture: UIGestureRecognizer) {
+        if !(gestureRecognizers ?? []).contains(gesture) {
+            addGestureRecognizer(gesture)
+        }
+    }
+    /// 安全移除手势
+    func safelyRemoveGesture(_ gesture: UIGestureRecognizer) {
+        if (gestureRecognizers ?? []).contains(gesture) {
+            removeGestureRecognizer(gesture)
+        }
     }
 }
