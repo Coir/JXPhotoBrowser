@@ -232,50 +232,59 @@ open class JXPhotoBrowserImageCell: UIView, UIScrollViewDelegate, UIGestureRecog
     /// 记录pan手势开始时，手势位置
     private var beganTouch = CGPoint.zero
     
+    /// 记录pan手势开始时的方向信息
+    private var beganPanContext: PanContext?
+    
     /// 响应拖动
     @objc open func onPan(_ pan: UIPanGestureRecognizer) {
         guard imageView.image != nil, let browser = photoBrowser else { return }
-        let total = browser.numberOfItems()
-        let isSingle = total <= 1
         let velocity = pan.velocity(in: self)
-        let translation = pan.translation(in: self)
-        let offsetY = scrollView.contentOffset.y
-        let maxOffsetY = max(0, scrollView.contentSize.height - scrollView.bounds.height)
-        let pageIndex = browser.pageIndex
-        let itemCount = browser.numberOfItems()
-        let ctx = panContext(velocity: velocity, pageIndex: pageIndex, itemCount: itemCount, offsetY: offsetY, maxOffsetY: maxOffsetY, isSingle: isSingle)
-        guard ctx.allowDown || ctx.allowUp || ctx.allowRight || ctx.allowLeft else {
-            if pan.state == .ended || pan.state == .cancelled {
-                browser.maskView.alpha = 1.0
-                browser.pageIndicator?.isHidden = false
-                resetImageViewPosition()
-            }
-            return
-        }
         switch pan.state {
         case .began:
+            let isSingle = browser.numberOfItems() <= 1
+            let offsetY = scrollView.contentOffset.y
+            let maxOffsetY = max(0, scrollView.contentSize.height - scrollView.bounds.height)
+            let pageIndex = browser.pageIndex
+            let itemCount = browser.numberOfItems()
+            /// 手势开始时确定方向，后续不再变更
+            beganPanContext = panContext(velocity: velocity, pageIndex: pageIndex, itemCount: itemCount, offsetY: offsetY, maxOffsetY: maxOffsetY, isSingle: isSingle)
             beganFrame = imageView.frame
             beganTouch = pan.location(in: scrollView)
-        case .changed:
-            let result = panResult(pan, isHorizontal: ctx.isHorizontal)
-            imageView.frame = result.frame
-            browser.maskView.alpha = result.scale * result.scale
-            browser.pageIndicator?.isHidden = result.scale < 0.99
-        case .ended, .cancelled:
-            imageView.frame = panResult(pan, isHorizontal: ctx.isHorizontal).frame
-            let isDown = ctx.isVertical && ctx.atTop && velocity.y > 0
-            let isUp = ctx.isVertical && ctx.atBottom && velocity.y < 0
-            let isRight = ctx.isHorizontal && ctx.atLeft && velocity.x > 0
-            let isLeft = ctx.isHorizontal && ctx.atRight && velocity.x < 0
-            if isDown || isUp || isRight || isLeft {
-                browser.dismiss()
-            } else {
-                browser.maskView.alpha = 1.0
-                browser.pageIndicator?.isHidden = false
-                resetImageViewPosition()
+        case .changed, .ended, .cancelled:
+            guard let ctx = beganPanContext else { return }
+            guard ctx.allowDown || ctx.allowUp || ctx.allowRight || ctx.allowLeft else {
+                if pan.state == .ended || pan.state == .cancelled {
+                    browser.maskView.alpha = 1.0
+                    browser.pageIndicator?.isHidden = false
+                    resetImageViewPosition()
+                }
+                return
+            }
+            
+            if pan.state == .changed {
+                let result = panResult(pan, isHorizontal: ctx.isHorizontal)
+                imageView.frame = result.frame
+                browser.maskView.alpha = result.scale * result.scale
+                browser.pageIndicator?.isHidden = result.scale < 0.99
+            } else if pan.state == .ended || pan.state == .cancelled {
+                imageView.frame = panResult(pan, isHorizontal: ctx.isHorizontal).frame
+                let isDown = ctx.isVertical && ctx.atTop && velocity.y > 0
+                let isUp = ctx.isVertical && ctx.atBottom && velocity.y < 0
+                let isRight = ctx.isHorizontal && ctx.atLeft && velocity.x > 0
+                let isLeft = ctx.isHorizontal && ctx.atRight && velocity.x < 0
+                if isDown || isUp || isRight || isLeft {
+                    browser.dismiss()
+                } else {
+                    browser.maskView.alpha = 1.0
+                    browser.pageIndicator?.isHidden = false
+                    resetImageViewPosition()
+                }
+                /// 手势结束后清空方向信息
+                beganPanContext = nil
             }
         default:
             resetImageViewPosition()
+            beganPanContext = nil
         }
     }
     
