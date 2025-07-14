@@ -268,8 +268,8 @@ open class JXPhotoBrowserImageCell: UIView, UIScrollViewDelegate, UIGestureRecog
                 browser.pageIndicator?.isHidden = result.scale < 0.99
             } else if pan.state == .ended || pan.state == .cancelled {
                 imageView.frame = panResult(pan, isHorizontal: ctx.isHorizontal).frame
-                let isDown = ctx.isVertical && ctx.atTop && velocity.y > 0
-                let isUp = ctx.isVertical && ctx.atBottom && velocity.y < 0
+                let isDown = ctx.isVertical && velocity.y > 0
+                let isUp = ctx.isVertical && velocity.y < 0
                 let isRight = ctx.isHorizontal && ctx.atLeft && velocity.x > 0
                 let isLeft = ctx.isHorizontal && ctx.atRight && velocity.x < 0
                 if isDown || isUp || isRight || isLeft {
